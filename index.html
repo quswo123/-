@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CBM·청구중량 계산기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+KR:wght@400;600;700&family=Saira+Stencil+One&display=swap">
+<style>
+/* Layout: 입력(화물 + 운임 단가) 왼쪽 → 결과(운임 비교, 중량, 추천) 오른쪽 고정. 폰에서는 위아래로 쌓임. 스텐실 서체는 핵심 결과 숫자에만 */
+:root {
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --ink: #14202e;
+  --muted: #5b6878;
+  --line: #d3dae2;
+  --accent: #1d5fae;
+  --accent-soft: #e2ecf8;
+  --signal: #b86e00;
+  --signal-soft: #fdf1dc;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-stencil: "Saira Stencil One", "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151c; --surface: #17202b; --ink: #e6ebf1; --muted: #93a0b0; --line: #2a3644;
+    --accent: #6aa7ee; --accent-soft: #1b2c42; --signal: #f2b23a; --signal-soft: #33280f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151c; --surface: #17202b; --ink: #e6ebf1; --muted: #93a0b0; --line: #2a3644;
+  --accent: #6aa7ee; --accent-soft: #1b2c42; --signal: #f2b23a; --signal-soft: #33280f;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap {
+  max-width: 1120px; margin: 0 auto;
+  padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+header { display: grid; gap: 6px; margin-bottom: 22px; }
+.code { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; color: var(--accent); }
+h1 { font-size: 26px; line-height: 1.25; margin: 0; font-weight: 700; text-wrap: balance; }
+.sub { margin: 0; color: var(--muted); max-width: 62ch; }
+
+.grid { display: grid; gap: 24px; grid-template-columns: 1fr; }
+@media (min-width: 900px) {
+  .grid { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; }
+  .results { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); max-height: calc(100vh - 32px); overflow-y: auto; }
+}
+.col { display: grid; gap: 22px; min-width: 0; }
+.block { display: grid; gap: 10px; min-width: 0; }
+.block-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 0; }
+
+button { font: inherit; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ghost {
+  font-size: 13px; background: none; border: 1px solid var(--line); color: var(--muted);
+  padding: 5px 10px; border-radius: 6px; cursor: pointer;
+}
+.ghost:hover { color: var(--ink); border-color: var(--muted); }
+
+.rows { display: grid; gap: 10px; }
+.row { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 10px; }
+.row-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.row-title { font-family: var(--font-mono); font-size: 12px; color: var(--muted); letter-spacing: 0.05em; }
+.row-meta { display: flex; align-items: center; gap: 6px; }
+.row-vol { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 540px) { .fields.five { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.field { display: grid; gap: 3px; min-width: 0; align-content: start; }
+.field label { font-size: 12px; color: var(--muted); line-height: 1.35; }
+input[type="number"], textarea {
+  width: 100%; font-family: var(--font-mono); font-size: 15px; font-variant-numeric: tabular-nums;
+  padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink);
+}
+.remove { font-size: 12px; background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 4px; }
+.remove:hover { color: var(--ink); background: var(--bg); }
+.add {
+  font-weight: 600; font-size: 14px; width: 100%; padding: 10px;
+  border: 1px dashed var(--line); border-radius: 8px; background: transparent; color: var(--accent); cursor: pointer;
+}
+.add:hover { border-color: var(--accent); }
+
+details.paste { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+details.paste summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent); }
+.paste-body { display: grid; gap: 8px; margin-top: 10px; }
+.paste-body textarea { min-height: 96px; font-size: 13px; resize: vertical; }
+.paste-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+.primary {
+  font-weight: 600; font-size: 14px; padding: 9px 16px; border-radius: 8px; border: none;
+  background: var(--accent); color: var(--surface); cursor: pointer;
+}
+
+.rate-group { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 10px; }
+.rate-group h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.rate-group .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 540px) { .rate-group .fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.total { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.total .k { font-size: 12px; color: var(--muted); }
+.total .v { font-family: var(--font-mono); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; }
+.panel.feature { border-color: var(--accent); }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.panel-head h3 { margin: 0; font-size: 16px; }
+.tag { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--signal-soft); color: var(--signal); white-space: nowrap; }
+.tag.blue { background: var(--accent-soft); color: var(--accent); }
+.tag.plain { background: var(--bg); color: var(--muted); }
+.big { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.big .num { font-family: var(--font-stencil); font-size: 38px; line-height: 1; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.big .unit { font-family: var(--font-mono); font-size: 15px; color: var(--muted); }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cmp { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.cmp.win { border-color: var(--signal); background: var(--signal-soft); }
+.cmp .k { font-size: 12px; color: var(--muted); }
+.cmp.win .k { color: var(--signal); }
+.cmp .v { font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.formula { font-family: var(--font-mono); font-size: 13px; color: var(--muted); background: var(--bg); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: nowrap; }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+.empty { font-size: 14px; color: var(--muted); margin: 0; padding: 10px 0; }
+
+.options { display: grid; gap: 10px; }
+.opt { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.opt.best { border-color: var(--signal); background: var(--signal-soft); }
+.opt-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.opt-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.opt-total { font-family: var(--font-mono); font-weight: 600; font-size: 16px; font-variant-numeric: tabular-nums; }
+.opt-track { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
+.opt-fill { height: 100%; background: var(--accent); }
+.opt.best .opt-fill { background: var(--signal); }
+.opt-detail { font-family: var(--font-mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+.bars { display: grid; gap: 8px; }
+.bar-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 64px; gap: 10px; align-items: center; }
+.bar-row .name { font-family: var(--font-mono); font-size: 13px; }
+.bar-row .pct { font-family: var(--font-mono); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.track { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+.fill { height: 100%; background: var(--accent); width: 0; transition: width .25s ease; }
+.fill.over { background: var(--signal); }
+@media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+
+.copy-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.copy-status { font-size: 13px; color: var(--muted); }
+#copyFallback { min-height: 140px; font-size: 12px; }
+
+footer { margin-top: 28px; color: var(--muted); font-size: 13px; max-width: 72ch; display: grid; gap: 4px; }
+footer p { margin: 0; }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="code">CBM · C.W. · R/T · FREIGHT</div>
+    <h1>CBM·청구중량 계산기</h1>
+    <p class="sub">패킹리스트와 운임 단가를 넣으면 항공 청구중량, 해상 운임톤, LCL·FCL·항공 총운임 비교까지 한 번에 계산해요. 입력값은 이 브라우저에 저장돼요.</p>
+  </header>
+
+  <div class="grid">
+    <div class="col">
+      <section class="block" aria-labelledby="cargoTitle">
+        <div class="block-head">
+          <h2 id="cargoTitle">화물 (패킹리스트)</h2>
+          <button class="ghost" id="clearCargo" type="button">화물 비우기</button>
+        </div>
+        <details class="paste">
+          <summary>엑셀에서 붙여넣기</summary>
+          <div class="paste-body">
+            <p class="hint">엑셀에서 가로·세로·높이(cm)·개당 무게(kg)·수량 순서의 열을 복사해 붙여넣으세요. 제목 행은 자동으로 건너뛰어요.</p>
+            <textarea id="pasteBox" aria-label="패킹리스트 붙여넣기" placeholder="가로	세로	높이	kg	수량"></textarea>
+            <div class="paste-actions">
+              <button class="primary" id="pasteBtn" type="button">목록에 추가</button>
+              <span class="hint" id="pasteStatus" role="status"></span>
+            </div>
+          </div>
+        </details>
+        <div class="rows" id="rows"></div>
+        <button class="add" id="addRow" type="button">+ 박스 종류 추가</button>
+      </section>
+
+      <section class="block" aria-labelledby="rateTitle">
+        <div class="block-head">
+          <h2 id="rateTitle">운임 단가</h2>
+          <button class="ghost" id="clearRates" type="button">단가 비우기</button>
+        </div>
+        <p class="hint">받은 견적서의 단가를 입력하세요. 비워둔 운송 방식은 비교에서 빠져요.</p>
+        <div id="rateGroups" class="block"></div>
+      </section>
+    </div>
+
+    <div class="col results" aria-labelledby="outTitle">
+      <h2 id="outTitle">계산 결과</h2>
+      <div class="totals">
+        <div class="total"><div class="k">총 수량</div><div class="v" id="tQty">—</div></div>
+        <div class="total"><div class="k">총 부피</div><div class="v" id="tCbm">—</div></div>
+        <div class="total"><div class="k">총 실제 무게</div><div class="v" id="tKg">—</div></div>
+      </div>
+
+      <div class="panel feature">
+        <div class="panel-head">
+          <h3>총운임 비교</h3>
+          <span class="tag plain" id="costTag">입력 대기</span>
+        </div>
+        <div class="options" id="options"></div>
+        <p class="note">원화 환산 총액 기준이에요. 통관비, 내륙운송비, 보험료는 포함되지 않아요.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>항공 청구중량</h3>
+          <span class="tag plain" id="airTag">입력 대기</span>
+        </div>
+        <div class="big"><span class="num" id="airCw">—</span><span class="unit">kg</span></div>
+        <div class="compare">
+          <div class="cmp" id="cmpActual"><div class="k">실제 무게</div><div class="v" id="airActual">—</div></div>
+          <div class="cmp" id="cmpVol"><div class="k">부피 무게</div><div class="v" id="airVol">—</div></div>
+        </div>
+        <div class="formula" id="airFormula">부피 무게 = 총 cm³ ÷ 6,000</div>
+        <p class="note">둘 중 큰 값에 0.5kg 단위 올림을 적용해요 (IATA 기준).</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>해상 LCL 운임톤 (R/T)</h3>
+          <span class="tag plain" id="rtTag">입력 대기</span>
+        </div>
+        <div class="big"><span class="num" id="rtVal">—</span><span class="unit">R/T</span></div>
+        <div class="formula" id="rtFormula">max(CBM, 톤)</div>
+        <p class="note">1 CBM과 1톤 중 큰 쪽으로 계산하고, 최소 1 R/T를 적용해요.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>컨테이너 적재율</h3>
+          <span class="tag plain" id="recTag">입력 대기</span>
+        </div>
+        <p class="note" id="recText" style="color: var(--ink)">박스 크기와 수량을 넣으면 적재율이 나와요.</p>
+        <div class="bars" id="bars"></div>
+        <p class="note">적재 기준 부피는 운임 단가의 '컨테이너 적재 기준'에서 바꿀 수 있어요. 중량 제한은 별도로 확인하세요.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>견적 메모로 복사</h3></div>
+        <div class="copy-row">
+          <button class="primary" id="copyBtn" type="button">결과 복사</button>
+          <span class="copy-status" id="copyStatus" role="status"></span>
+        </div>
+        <textarea id="copyFallback" hidden readonly aria-label="복사할 결과 텍스트"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <p>CBM = 가로×세로×높이(cm) ÷ 1,000,000 · 항공 부피 무게 = 가로×세로×높이(cm) ÷ 6,000 · R/T = max(CBM, 톤)</p>
+    <p>LCL = R/T × (O/F + 할증) × 환율 + R/T × CFS·THC + DOC · FCL = 대수 × [(O/F + BAF) × 환율 + THC] + DOC · 항공 = 청구중량 × (운임 + FSC) × 환율 + 기타 비용</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var CARGO_KEY = "cbm-calc-cargo-v2";
+  var RATE_KEY = "cbm-calc-rates-v2";
+
+  var RATE_GROUPS = [
+    { title: "공통", fields: [
+      { k: "fx", label: "환율 (원/USD)" },
+      { k: "docFee", label: "DOC Fee (원/건)" }
+    ] },
+    { title: "해상 LCL", fields: [
+      { k: "lclOf", label: "O/F (USD/R/T)" },
+      { k: "lclBaf", label: "BAF 등 할증 (USD/R/T)" },
+      { k: "lclLocal", label: "CFS·THC (원/R/T)" }
+    ] },
+    { title: "해상 FCL", fields: [
+      { k: "of20", label: "O/F 20ft (USD/대)" },
+      { k: "of40", label: "O/F 40ft (USD/대)" },
+      { k: "of40hc", label: "O/F 40HC (USD/대)" },
+      { k: "fclBaf", label: "BAF (USD/대)" },
+      { k: "thc20", label: "THC 20ft (원/대)" },
+      { k: "thc40", label: "THC 40ft·HC (원/대)" }
+    ] },
+    { title: "항공", fields: [
+      { k: "airRate", label: "항공운임 (USD/kg)" },
+      { k: "airFsc", label: "유류할증 FSC (USD/kg)" },
+      { k: "airLocal", label: "기타 비용 (원/건)" }
+    ] },
+    { title: "컨테이너 적재 기준", fields: [
+      { k: "cap20", label: "20ft (CBM)" },
+      { k: "cap40", label: "40ft (CBM)" },
+      { k: "cap40hc", label: "40HC (CBM)" }
+    ] }
+  ];
+  var CAP_DEFAULTS = { cap20: 28, cap40: 58, cap40hc: 68 };
+
+  var blankRow = function () { return { l: "", w: "", h: "", kg: "", qty: "" }; };
+  var rows = loadJSON(CARGO_KEY, Array.isArray) || [blankRow()];
+  if (!rows.length) rows = [blankRow()];
+  var rates = loadJSON(RATE_KEY, function (o) { return o && typeof o === "object" && !Array.isArray(o); }) || {};
+  Object.keys(CAP_DEFAULTS).forEach(function (k) { if (rates[k] === undefined || rates[k] === "") rates[k] = CAP_DEFAULTS[k]; });
+
+  var $ = function (id) { return document.getElementById(id); };
+  var fmt = function (n, d) { return Number(n).toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d }); };
+  var won = function (n) { return "₩" + fmt(Math.round(n), 0); };
+  function num(v) { var n = parseFloat(v); return isFinite(n) && n > 0 ? n : 0; }
+
+  function loadJSON(key, check) {
+    try { var raw = localStorage.getItem(key); if (!raw) return null; var v = JSON.parse(raw); return check(v) ? v : null; }
+    catch (e) { return null; }
+  }
+  function saveAll() {
+    try { localStorage.setItem(CARGO_KEY, JSON.stringify(rows)); localStorage.setItem(RATE_KEY, JSON.stringify(rates)); } catch (e) {}
+  }
+
+  var FIELDS = [
+    { key: "l", label: "가로 cm", step: "1" },
+    { key: "w", label: "세로 cm", step: "1" },
+    { key: "h", label: "높이 cm", step: "1" },
+    { key: "kg", label: "개당 kg", step: "0.1" },
+    { key: "qty", label: "수량", step: "1" }
+  ];
+
+  function renderRows() {
+    var box = $("rows");
+    box.innerHTML = "";
+    rows.forEach(function (r, i) {
+      var letter = i < 26 ? String.fromCharCode(65 + i) : String(i + 1);
+      var card = document.createElement("div");
+      card.className = "row";
+      var head = document.createElement("div");
+      head.className = "row-head";
+      var t = document.createElement("span");
+      t.className = "row-title";
+      t.textContent = "박스 " + letter;
+      var meta = document.createElement("div");
+      meta.className = "row-meta";
+      var vol = document.createElement("span");
+      vol.className = "row-vol";
+      vol.id = "vol-" + i;
+      meta.appendChild(vol);
+      if (rows.length > 1) {
+        var rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "remove";
+        rm.textContent = "삭제";
+        rm.setAttribute("aria-label", "박스 " + letter + " 삭제");
+        rm.addEventListener("click", function () { rows.splice(i, 1); renderRows(); });
+        meta.appendChild(rm);
+      }
+      head.appendChild(t);
+      head.appendChild(meta);
+      card.appendChild(head);
+
+      var fields = document.createElement("div");
+      fields.className = "fields five";
+      FIELDS.forEach(function (f) {
+        var wrap = document.createElement("div");
+        wrap.className = "field";
+        var id = "in-" + i + "-" + f.key;
+        var lab = document.createElement("label");
+        lab.setAttribute("for", id);
+        lab.textContent = f.label;
+        var inp = document.createElement("input");
+        inp.id = id; inp.type = "number"; inp.inputMode = "decimal"; inp.min = "0"; inp.step = f.step;
+        if (f.key === "qty") inp.placeholder = "1";
+        inp.value = r[f.key] === "" || r[f.key] === undefined ? "" : r[f.key];
+        inp.addEventListener("input", function () { r[f.key] = inp.value === "" ? "" : parseFloat(inp.value); compute(); });
+        wrap.appendChild(lab);
+        wrap.appendChild(inp);
+        fields.appendChild(wrap);
+      });
+      card.appendChild(fields);
+      box.appendChild(card);
+    });
+    compute();
+  }
+
+  function renderRates() {
+    var box = $("rateGroups");
+    box.innerHTML = "";
+    RATE_GROUPS.forEach(function (g) {
+      var sec = document.createElement("div");
+      sec.className = "rate-group";
+      var h = document.createElement("h3");
+      h.textContent = g.title;
+      sec.appendChild(h);
+      var fields = document.createElement("div");
+      fields.className = "fields";
+      g.fields.forEach(function (f) {
+        var wrap = document.createElement("div");
+        wrap.className = "field";
+        var id = "rate-" + f.k;
+        var lab = document.createElement("label");
+        lab.setAttribute("for", id);
+        lab.textContent = f.label;
+        var inp = document.createElement("input");
+        inp.id = id; inp.type = "number"; inp.inputMode = "decimal"; inp.min = "0"; inp.step = "any";
+        inp.value = rates[f.k] === "" || rates[f.k] === undefined ? "" : rates[f.k];
+        inp.addEventListener("input", function () { rates[f.k] = inp.value === "" ? "" : parseFloat(inp.value); compute(); });
+        wrap.appendChild(lab);
+        wrap.appendChild(inp);
+        fields.appendChild(wrap);
+      });
+      sec.appendChild(fields);
+      box.appendChild(sec);
+    });
+  }
+
+  var lastSummary = "";
+
+  function compute() {
+    var volCm3 = 0, kg = 0, qty = 0;
+    rows.forEach(function (r, i) {
+      var v = num(r.l) * num(r.w) * num(r.h);
+      var q = (r.qty === "" || r.qty === undefined || r.qty === null) ? (v > 0 ? 1 : 0) : Math.floor(num(r.qty));
+      volCm3 += v * q; kg += num(r.kg) * q; qty += q;
+      var el = $("vol-" + i);
+      if (el) el.textContent = v > 0 ? fmt(v / 1e6, 3) + " CBM/개" : "";
+    });
+    var has = qty > 0 && volCm3 > 0;
+
+    var cbm = volCm3 / 1e6;
+    var volW = volCm3 / 6000;
+    var cw = Math.ceil(Math.max(kg, volW) * 2 - 1e-9) / 2;
+    var isVolume = volW > kg;
+    var ton = kg / 1000;
+    var rt = Math.max(cbm, ton);
+    var rtBill = Math.max(rt, 1);
+
+    $("tQty").textContent = qty > 0 ? fmt(qty, 0) + "개" : "—";
+    $("tCbm").textContent = has ? fmt(cbm, 2) + " CBM" : "—";
+    $("tKg").textContent = has ? fmt(kg, 1) + " kg" : "—";
+
+    // 항공
+    $("airCw").textContent = has ? fmt(cw, 1) : "—";
+    $("airActual").textContent = has ? fmt(kg, 1) + " kg" : "—";
+    $("airVol").textContent = has ? fmt(volW, 2) + " kg" : "—";
+    $("cmpActual").classList.toggle("win", has && !isVolume);
+    $("cmpVol").classList.toggle("win", has && isVolume);
+    setTag("airTag", has ? (isVolume ? "부피화물" : "중량화물") : "입력 대기", has ? "" : "plain");
+    $("airFormula").textContent = has ? "부피 무게 = " + fmt(volCm3, 0) + " cm³ ÷ 6,000 = " + fmt(volW, 2) + " kg" : "부피 무게 = 총 cm³ ÷ 6,000";
+
+    // R/T
+    $("rtVal").textContent = has ? fmt(rtBill, 2) : "—";
+    setTag("rtTag", has ? (ton > cbm ? "톤 기준" : "CBM 기준") : "입력 대기", has ? "blue" : "plain");
+    $("rtFormula").textContent = has ? "max(" + fmt(cbm, 2) + " CBM, " + fmt(ton, 2) + " 톤) = " + fmt(rt, 2) + " R/T" + (rt < 1 ? " → 최소 1 R/T" : "") : "max(CBM, 톤)";
+
+    // 컨테이너
+    var caps = [
+      { name: "20ft", cap: num(rates.cap20) || CAP_DEFAULTS.cap20, of: "of20", thc: "thc20" },
+      { name: "40ft", cap: num(rates.cap40) || CAP_DEFAULTS.cap40, of: "of40", thc: "thc40" },
+      { name: "40HC", cap: num(rates.cap40hc) || CAP_DEFAULTS.cap40hc, of: "of40hc", thc: "thc40" }
+    ];
+    var recTag = "입력 대기", recText = "박스 크기와 수량을 넣으면 적재율이 나와요.";
+    if (has) {
+      if (cbm < 10) { recTag = "LCL 적합"; recText = "컨테이너를 다 채우기엔 적은 양이에요. 부피 기준으로는 LCL이 유리한 구간이에요."; }
+      else if (cbm <= 15) { recTag = "비교 구간"; recText = "LCL과 FCL 20ft 운임이 비슷해지는 구간이에요. 위 총운임 비교로 확인하세요."; }
+      else if (cbm <= caps[0].cap) { recTag = "20ft 1대"; recText = "20ft 컨테이너 한 대에 들어가는 양이에요."; }
+      else if (cbm <= caps[1].cap) { recTag = "40ft 1대"; recText = "20ft에는 다 안 들어가요. 40ft 한 대 기준으로 검토해보세요."; }
+      else if (cbm <= caps[2].cap) { recTag = "40HC 1대"; recText = "40ft로는 빠듯해요. 40HC 한 대 기준으로 검토해보세요."; }
+      else { var nn = Math.ceil(cbm / caps[2].cap); recTag = "40HC " + nn + "대"; recText = "한 대로는 부족해요. 40HC 기준 약 " + nn + "대가 필요해요."; }
+    }
+    setTag("recTag", recTag, has ? "blue" : "plain");
+    $("recText").textContent = recText;
+    var bars = $("bars");
+    bars.innerHTML = "";
+    if (has) {
+      caps.forEach(function (c) {
+        var pct = (cbm / c.cap) * 100;
+        var row = document.createElement("div");
+        row.className = "bar-row";
+        row.innerHTML = '<span class="name">' + c.name + '</span>' +
+          '<div class="track" role="img" aria-label="' + c.name + " 적재율 " + Math.round(pct) + '%"><div class="fill' + (pct > 100 ? " over" : "") + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
+          '<span class="pct">' + Math.round(pct) + '%</span>';
+        bars.appendChild(row);
+      });
+    }
+
+    // 총운임 비교
+    var fx = num(rates.fx), doc = num(rates.docFee);
+    var opts = [];
+    var optBox = $("options");
+    optBox.innerHTML = "";
+    var costMsg = "";
+    if (!has) costMsg = "화물을 입력하면 운송 방식별 총운임을 비교해요.";
+    else if (!fx) costMsg = "환율을 입력하면 비교가 시작돼요. 견적서의 운임 단가도 함께 넣어주세요.";
+    else {
+      if (num(rates.lclOf)) {
+        var lclUsd = rtBill * (num(rates.lclOf) + num(rates.lclBaf));
+        var lclKrw = rtBill * num(rates.lclLocal) + doc;
+        opts.push({ name: "해상 LCL", sub: fmt(rtBill, 2) + " R/T", total: lclUsd * fx + lclKrw,
+          detail: "USD " + fmt(lclUsd, 2) + " × " + fmt(fx, 2) + " + 현지비용 " + won(lclKrw) });
+      }
+      caps.forEach(function (c) {
+        if (!num(rates[c.of])) return;
+        var n = Math.max(1, Math.ceil(cbm / c.cap));
+        var usd = n * (num(rates[c.of]) + num(rates.fclBaf));
+        var krw = n * num(rates[c.thc]) + doc;
+        opts.push({ name: "해상 FCL " + c.name, sub: n + "대 · 적재율 " + Math.round((cbm / (c.cap * n)) * 100) + "%", total: usd * fx + krw,
+          detail: "USD " + fmt(usd, 2) + " × " + fmt(fx, 2) + " + 현지비용 " + won(krw) });
+      });
+      if (num(rates.airRate)) {
+        var airUsd = cw * (num(rates.airRate) + num(rates.airFsc));
+        var airKrw = num(rates.airLocal);
+        opts.push({ name: "항공", sub: fmt(cw, 1) + " kg", fast: true, total: airUsd * fx + airKrw,
+          detail: "USD " + fmt(airUsd, 2) + " × " + fmt(fx, 2) + " + 기타 " + won(airKrw) });
+      }
+      if (!opts.length) costMsg = "LCL, FCL, 항공 중 하나 이상의 운임 단가를 입력하세요.";
+    }
+
+    if (costMsg) {
+      var p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = costMsg;
+      optBox.appendChild(p);
+      setTag("costTag", "입력 대기", "plain");
+    } else {
+      opts.sort(function (a, b) { return a.total - b.total; });
+      var max = opts[opts.length - 1].total || 1;
+      opts.forEach(function (o, i) {
+        var el = document.createElement("div");
+        el.className = "opt" + (i === 0 ? " best" : "");
+        var top = document.createElement("div");
+        top.className = "opt-top";
+        var nm = document.createElement("div");
+        nm.className = "opt-name";
+        nm.textContent = o.name;
+        if (i === 0 && opts.length > 1) { var b = document.createElement("span"); b.className = "tag"; b.textContent = "최저가"; nm.appendChild(b); }
+        if (o.fast) { var f = document.createElement("span"); f.className = "tag blue"; f.textContent = "빠른 운송"; nm.appendChild(f); }
+        var tot = document.createElement("div");
+        tot.className = "opt-total";
+        tot.textContent = won(o.total);
+        top.appendChild(nm); top.appendChild(tot);
+        var track = document.createElement("div");
+        track.className = "opt-track";
+        track.innerHTML = '<div class="opt-fill" style="width:' + Math.max(2, (o.total / max) * 100) + '%"></div>';
+        var det = document.createElement("div");
+        det.className = "opt-detail";
+        det.textContent = o.sub + " · " + o.detail;
+        el.appendChild(top); el.appendChild(track); el.appendChild(det);
+        optBox.appendChild(el);
+      });
+      setTag("costTag", opts.length > 1 ? opts[0].name + " 최저" : "1개 방식", opts.length > 1 ? "" : "blue");
+    }
+
+    // 요약
+    var lines = ["[화물 계산 결과]"];
+    if (has) {
+      lines.push("총 수량: " + fmt(qty, 0) + "개 / 총 부피: " + fmt(cbm, 2) + " CBM / 총 실제 무게: " + fmt(kg, 1) + " kg");
+      lines.push("항공 청구중량: " + fmt(cw, 1) + " kg (" + (isVolume ? "부피화물" : "중량화물") + ")");
+      lines.push("해상 LCL: " + fmt(rtBill, 2) + " R/T");
+      lines.push("컨테이너: " + recTag);
+      if (opts.length) {
+        lines.push("", "[총운임 비교] 환율 " + fmt(fx, 2) + "원/USD 기준");
+        opts.forEach(function (o, i) { lines.push((i + 1) + ". " + o.name + " (" + o.sub + "): " + won(o.total)); });
+        lines.push("※ 통관비, 내륙운송비, 보험료 별도");
+      }
+    } else {
+      lines.push("입력된 화물이 없어요.");
+    }
+    lastSummary = lines.join("\n");
+
+    saveAll();
+  }
+
+  function setTag(id, text, cls) {
+    var el = $(id);
+    el.textContent = text;
+    el.className = "tag" + (cls ? " " + cls : "");
+  }
+
+  $("addRow").addEventListener("click", function () {
+    rows.push(blankRow());
+    renderRows();
+    var first = $("in-" + (rows.length - 1) + "-l");
+    if (first) first.focus();
+  });
+
+  $("clearCargo").addEventListener("click", function () { rows = [blankRow()]; renderRows(); });
+  $("clearRates").addEventListener("click", function () {
+    rates = {};
+    Object.keys(CAP_DEFAULTS).forEach(function (k) { rates[k] = CAP_DEFAULTS[k]; });
+    renderRates(); compute();
+  });
+
+  $("pasteBtn").addEventListener("click", function () {
+    var text = $("pasteBox").value;
+    var added = [], skipped = 0;
+    text.split(/\r?\n/).forEach(function (line) {
+      if (!line.trim()) return;
+      var parts = line.split(/[\t,;]+|\s+/).map(function (s) { return s.replace(/,/g, "").trim(); }).filter(Boolean);
+      var nums = parts.map(parseFloat);
+      if (nums.length < 4 || nums.slice(0, 4).some(function (n) { return !isFinite(n); })) { skipped++; return; }
+      added.push({ l: nums[0], w: nums[1], h: nums[2], kg: nums[3], qty: isFinite(nums[4]) && nums[4] > 0 ? nums[4] : 1 });
+    });
+    var status = $("pasteStatus");
+    if (!added.length) { status.textContent = "읽을 수 있는 행이 없어요. 숫자 4~5개(가로·세로·높이·kg·수량)가 한 줄에 있어야 해요."; return; }
+    var onlyBlank = rows.length === 1 && FIELDS.every(function (f) { return rows[0][f.key] === "" || rows[0][f.key] === undefined; });
+    rows = onlyBlank ? added : rows.concat(added);
+    $("pasteBox").value = "";
+    status.textContent = added.length + "행을 추가했어요." + (skipped ? " 제목 등 " + skipped + "행은 건너뛰었어요." : "");
+    renderRows();
+  });
+
+  $("copyBtn").addEventListener("click", function () {
+    var status = $("copyStatus"), fb = $("copyFallback");
+    function fallback() { fb.hidden = false; fb.value = lastSummary; fb.focus(); fb.select(); status.textContent = "아래 텍스트를 길게 눌러 복사하세요."; }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(lastSummary).then(function () { fb.hidden = true; status.textContent = "복사했어요. 메일이나 메모에 붙여넣으세요."; }, fallback);
+      } else fallback();
+    } catch (e) { fallback(); }
+  });
+
+  renderRates();
+  renderRows();
+})();
+</script>
+
+</body>
+</html>

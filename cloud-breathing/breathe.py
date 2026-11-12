@@ -1,8 +1,9 @@
-"""Sleeping cloud — baby-like breathing loop (v5: natural breath rhythm + breath-linked float + shading).
+"""Sleeping cloud — baby-like breathing loop (v6: bigger motion that still reads at small sizes, face kept rigid).
 
 Usage:
-    python breathe.py                       # renders renders/out.mp4 (same look as v5)
-    python breathe.py --v3                  # previous v3 rhythm/float for comparison
+    python breathe.py                       # renders renders/out.mp4 (same look as v6, for small display)
+    python breathe.py --preset v5           # v5: same rhythm, smaller motion (for large display)
+    python breathe.py --preset v3           # v3 rhythm/float for comparison
     python breathe.py --no-shading          # v2 look
     python breathe.py --morph 14 --shade 0.6 --light -45 -o renders/test.mp4
     python breathe.py --alpha               # also writes transparent PNG sequence (for Premiere/AE)
@@ -20,20 +21,23 @@ p.add_argument("-o", "--output", default="renders/out.mp4")
 p.add_argument("--fps", type=int, default=30)
 p.add_argument("--breaths", type=int, default=2, help="breaths per loop (loop = breaths * period)")
 p.add_argument("--period", type=float, default=2.5, help="seconds per breath")
-p.add_argument("--breath-y", type=float, default=0.040, help="vertical swell of the deepest breath (fraction)")
-p.add_argument("--breath-x", type=float, default=0.016, help="horizontal swell of the deepest breath (fraction)")
-p.add_argument("--inhale", type=float, default=0.38, help="inhale share of each breath")
-p.add_argument("--rest", type=float, default=0.06, help="still pause at the bottom of each breath (share)")
-p.add_argument("--breath-var", type=float, default=0.15, help="every other breath is this much shallower (0 = identical)")
-p.add_argument("--breath-swing", type=float, default=0.06, help="deep breath is this much longer, shallow one shorter (0 = even)")
-p.add_argument("--morph", type=float, default=9.0, help="outline morph amount (px)")
-p.add_argument("--bob", type=float, default=3.5, help="slow float up/down over the whole loop (px)")
-p.add_argument("--bob-breath", type=float, default=5.0, help="extra lift that rides each breath, a beat late (px)")
-p.add_argument("--tilt", type=float, default=0.5, help="slow rocking (deg)")
-p.add_argument("--tilt-breath", type=float, default=0.25, help="head side lifts on each inhale (deg)")
-p.add_argument("--blush", type=float, default=0.35, help="how much the cheeks warm up on inhale")
-p.add_argument("--v3", action="store_true", help="use the v3 rhythm/float/size (even breaths, independent float)")
-p.add_argument("--tail", type=float, default=4.0, help="tail sway (deg)")
+p.add_argument("--breath-y", type=float, default=None, help="vertical swell of the deepest breath (fraction)")
+p.add_argument("--breath-x", type=float, default=None, help="horizontal swell of the deepest breath (fraction)")
+p.add_argument("--inhale", type=float, default=None, help="inhale share of each breath")
+p.add_argument("--rest", type=float, default=None, help="still pause at the bottom of each breath (share)")
+p.add_argument("--breath-var", type=float, default=None, help="every other breath is this much shallower (0 = identical)")
+p.add_argument("--breath-swing", type=float, default=None, help="deep breath is this much longer, shallow one shorter (0 = even)")
+p.add_argument("--morph", type=float, default=None, help="outline morph amount (px)")
+p.add_argument("--bob", type=float, default=None, help="slow float up/down over the whole loop (px)")
+p.add_argument("--bob-breath", type=float, default=None, help="extra lift that rides each breath, a beat late (px)")
+p.add_argument("--tilt", type=float, default=None, help="slow rocking (deg)")
+p.add_argument("--tilt-breath", type=float, default=None, help="head side lifts on each inhale (deg)")
+p.add_argument("--blush", type=float, default=None, help="how much the cheeks warm up on inhale")
+p.add_argument("--face-lock", type=float, default=None, help="1 = face moves as one piece instead of stretching with the breath")
+p.add_argument("--preset", choices=["v3", "v5", "v6"], default="v6",
+               help="motion preset (v6 = bigger motion for small display, v5 = subtle, v3 = original); flags override it")
+p.add_argument("--v3", action="store_true", help="same as --preset v3")
+p.add_argument("--tail", type=float, default=None, help="tail sway (deg)")
 p.add_argument("--shade", type=float, default=0.42, help="shadow strength (0 = off)")
 p.add_argument("--sheen", type=float, default=0.38, help="highlight strength")
 p.add_argument("--light", type=float, default=-135.0, help="light direction deg (-135 = upper-left, -45 = upper-right)")
@@ -44,9 +48,20 @@ p.add_argument("--alpha", action="store_true", help="also export transparent PNG
 p.add_argument("--webm", action="store_true", help="also export a transparent VP9 WebM next to the output (<output>.webm)")
 p.add_argument("--seed", type=int, default=7)
 a = p.parse_args()
-if a.v3:
-    a.breath_y, a.breath_x, a.inhale, a.rest, a.breath_var, a.breath_swing = 0.042, 0.018, 0.4, 0.1, 0.0, 0.0
-    a.bob, a.bob_breath, a.tilt, a.tilt_breath = 7.0, 0.0, 0.7, 0.0
+PRESETS = {
+    # original v3: even breaths, float unrelated to breathing
+    "v3": dict(breath_y=0.042, breath_x=0.018, inhale=0.40, rest=0.10, breath_var=0.0, breath_swing=0.0, morph=9.0,
+               bob=7.0, bob_breath=0.0, tilt=0.7, tilt_breath=0.0, blush=0.35, tail=4.0, face_lock=0.0),
+    # v5: natural rhythm, subtle sizes (good when shown large)
+    "v5": dict(breath_y=0.040, breath_x=0.016, inhale=0.38, rest=0.06, breath_var=0.15, breath_swing=0.06, morph=9.0,
+               bob=3.5, bob_breath=5.0, tilt=0.5, tilt_breath=0.25, blush=0.35, tail=4.0, face_lock=0.0),
+    # v6: same rhythm, motion about 2-3x so it still reads at keyboard-sticker size; face moves as one piece
+    "v6": dict(breath_y=0.072, breath_x=0.026, inhale=0.38, rest=0.06, breath_var=0.15, breath_swing=0.06, morph=12.0,
+               bob=8.0, bob_breath=15.0, tilt=1.0, tilt_breath=0.7, blush=1.0, tail=8.0, face_lock=1.0),
+}
+for k_, v_ in PRESETS["v3" if a.v3 else a.preset].items():
+    if getattr(a, k_) is None:
+        setattr(a, k_, v_)
 
 src = cv2.imread(a.input, cv2.IMREAD_UNCHANGED).astype(np.float32)
 assert src.shape[2] == 4, "input must be a transparent PNG (RGBA)"
@@ -68,6 +83,19 @@ def soft_disc(cx_, cy_, rx, ry, feather):
 
 
 face = soft_disc(810, 640, 190, 110, 0.5)     # keep eyes/mouth crisp
+
+
+def disc_at(X, Y, cx_, cy_, rx, ry, feather, ang_deg=0.0):
+    # soft ellipse evaluated at arbitrary (warped) coordinates, optionally rotated
+    ca, sa = math.cos(math.radians(ang_deg)), math.sin(math.radians(ang_deg))
+    u, v = X - cx_ * sc, Y - cy_ * sc
+    d = np.sqrt(((ca * u + sa * v) / (rx * sc)) ** 2 + ((-sa * u + ca * v) / (ry * sc)) ** 2)
+    return np.clip((1.0 - d) / feather + 0.5, 0, 1)
+
+
+# eyes, mouth and cheeks measured on the artwork: x 615-1050, y 575-760, tilted ~17 deg (right side higher)
+FACE_C = (827.0, 666.0)
+FACE_AX = (290.0, 95.0, 0.4, -17.4)            # rx, ry, feather, angle
 tail = soft_disc(140, 640, 150, 130, 0.6)     # curl on the left
 pillow = soft_disc(970, 790, 230, 130, 0.5)   # small cloud under the cheek
 cheeks = (soft_disc(679, 713, 62, 50, 0.6) + soft_disc(975, 620, 76, 44, 0.6))[..., None]
@@ -181,8 +209,17 @@ for i in range(n_frames):
     # 2) breathing (bottom anchored); pillow follows a beat later and softer
     fp = B(t, 0.18)
     fl = fb * (1 - pillow) + 0.6 * fp * pillow
-    Y = base - (base - Y) / (1 + a.breath_y * fl)
-    X = cx + (X - cx) / (1 + a.breath_x * fl * (0.3 + 0.7 * h))
+    ky, kx = a.breath_y * fl, a.breath_x * fl * (0.3 + 0.7 * h)
+    dY = (base - Y) * ky / (1 + ky)              # stretch: things higher up rise more
+    dX = (X - cx) * kx / (1 + kx)
+    if a.face_lock:
+        # inside the face the swell becomes a plain lift/shift of the face centre -> eyes and mouth keep their shape
+        fx, fy = FACE_C[0] * sc, FACE_C[1] * sc
+        kyf, kxf = a.breath_y * fb, a.breath_x * fb * (0.3 + 0.7 * (base - fy) / (base - top))
+        wf = a.face_lock * disc_at(X, Y, FACE_C[0] + (fx - cx) * kxf / sc, FACE_C[1] - (base - fy) * kyf / sc, *FACE_AX)
+        dY = (1 - wf) * dY + wf * (base - fy) * kyf
+        dX = (1 - wf) * dX + wf * (fx - cx) * kxf
+    Y, X = Y + dY, X - dX
     # 3) tail sway
     ang = math.radians(a.tail) * math.sin(w1 * 2 * t - 1.3) * tail
     c2, s2 = np.cos(-ang), np.sin(-ang)

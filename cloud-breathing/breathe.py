@@ -1,7 +1,8 @@
-"""Sleeping cloud — baby-like breathing loop (v3: breathing + morph + float + shading).
+"""Sleeping cloud — baby-like breathing loop (v5: natural breath rhythm + breath-linked float + shading).
 
 Usage:
-    python breathe.py                       # renders renders/out.mp4 (same look as v3)
+    python breathe.py                       # renders renders/out.mp4 (same look as v5)
+    python breathe.py --v3                  # previous v3 rhythm/float for comparison
     python breathe.py --no-shading          # v2 look
     python breathe.py --morph 14 --shade 0.6 --light -45 -o renders/test.mp4
     python breathe.py --alpha               # also writes transparent PNG sequence (for Premiere/AE)
@@ -19,11 +20,19 @@ p.add_argument("-o", "--output", default="renders/out.mp4")
 p.add_argument("--fps", type=int, default=30)
 p.add_argument("--breaths", type=int, default=2, help="breaths per loop (loop = breaths * period)")
 p.add_argument("--period", type=float, default=2.5, help="seconds per breath")
-p.add_argument("--breath-y", type=float, default=0.042, help="vertical swell (fraction)")
-p.add_argument("--breath-x", type=float, default=0.018, help="horizontal swell (fraction)")
+p.add_argument("--breath-y", type=float, default=0.040, help="vertical swell of the deepest breath (fraction)")
+p.add_argument("--breath-x", type=float, default=0.016, help="horizontal swell of the deepest breath (fraction)")
+p.add_argument("--inhale", type=float, default=0.38, help="inhale share of each breath")
+p.add_argument("--rest", type=float, default=0.06, help="still pause at the bottom of each breath (share)")
+p.add_argument("--breath-var", type=float, default=0.15, help="every other breath is this much shallower (0 = identical)")
+p.add_argument("--breath-swing", type=float, default=0.06, help="deep breath is this much longer, shallow one shorter (0 = even)")
 p.add_argument("--morph", type=float, default=9.0, help="outline morph amount (px)")
-p.add_argument("--bob", type=float, default=7.0, help="float up/down (px)")
-p.add_argument("--tilt", type=float, default=0.7, help="tilt (deg)")
+p.add_argument("--bob", type=float, default=3.5, help="slow float up/down over the whole loop (px)")
+p.add_argument("--bob-breath", type=float, default=5.0, help="extra lift that rides each breath, a beat late (px)")
+p.add_argument("--tilt", type=float, default=0.5, help="slow rocking (deg)")
+p.add_argument("--tilt-breath", type=float, default=0.25, help="head side lifts on each inhale (deg)")
+p.add_argument("--blush", type=float, default=0.35, help="how much the cheeks warm up on inhale")
+p.add_argument("--v3", action="store_true", help="use the v3 rhythm/float/size (even breaths, independent float)")
 p.add_argument("--tail", type=float, default=4.0, help="tail sway (deg)")
 p.add_argument("--shade", type=float, default=0.42, help="shadow strength (0 = off)")
 p.add_argument("--sheen", type=float, default=0.38, help="highlight strength")
@@ -35,6 +44,9 @@ p.add_argument("--alpha", action="store_true", help="also export transparent PNG
 p.add_argument("--webm", action="store_true", help="also export a transparent VP9 WebM next to the output (<output>.webm)")
 p.add_argument("--seed", type=int, default=7)
 a = p.parse_args()
+if a.v3:
+    a.breath_y, a.breath_x, a.inhale, a.rest, a.breath_var, a.breath_swing = 0.042, 0.018, 0.4, 0.1, 0.0, 0.0
+    a.bob, a.bob_breath, a.tilt, a.tilt_breath = 7.0, 0.0, 0.7, 0.0
 
 src = cv2.imread(a.input, cv2.IMREAD_UNCHANGED).astype(np.float32)
 assert src.shape[2] == 4, "input must be a transparent PNG (RGBA)"
@@ -58,6 +70,8 @@ def soft_disc(cx_, cy_, rx, ry, feather):
 face = soft_disc(810, 640, 190, 110, 0.5)     # keep eyes/mouth crisp
 tail = soft_disc(140, 640, 150, 130, 0.6)     # curl on the left
 pillow = soft_disc(970, 790, 230, 130, 0.5)   # small cloud under the cheek
+cheeks = (soft_disc(679, 713, 62, 50, 0.6) + soft_disc(975, 620, 76, 44, 0.6))[..., None]
+BLUSH = np.array([-18, -8, 6], np.float32)       # BGR nudge toward a warmer pink
 
 # ---- outline morph: smooth, loopable noise, strongest near the edge, weak on the face
 alpha_m = (src[..., 3] > 20).astype(np.uint8)
@@ -96,8 +110,10 @@ SHEEN_COL = np.array([228, 246, 255], np.float32)   # BGR warm cream
 
 
 def shade_src(t, fb):
+    out = src.copy()
+    out[..., :3] = np.clip(out[..., :3] + (a.blush * fb) * cheeks * BLUSH, 0, 255)  # blush deepens on inhale
     if a.no_shading:
-        return src
+        return out
     th = math.radians(a.light + 18 * math.sin(w1 * t))   # light drifts slowly
     el = math.radians(38 + 6 * math.sin(w1 * t + 1.2))
     lx, ly, lz = math.cos(el) * math.cos(th), math.cos(el) * math.sin(th), math.sin(el)
@@ -107,7 +123,6 @@ def shade_src(t, fb):
     lite = np.clip((lam - flat) / (1 - flat), 0, 1) ** 1.6
     S = a.shade * dark ** 1.2 * fillw
     L = (a.sheen + 0.14 * fb) * lite * fillw              # highlight brightens on inhale
-    out = src.copy()
     c = out[..., :3]
     c = c + (SHADOW_COL - c) * S[..., None]
     c = c + (SHEEN_COL - c) * L[..., None]
@@ -115,17 +130,32 @@ def shade_src(t, fb):
     return out
 
 
+# Breath schedule: alternate a deeper, slightly longer breath with a shallower, shorter one,
+# so the two breaths in the loop are not carbon copies. Durations sum to DUR -> still loops.
+_d = [a.period * (1 + a.breath_swing * (1 if k % 2 == 0 else -1)) for k in range(a.breaths)]
+DURS = [d * DUR / sum(_d) for d in _d]
+DEPTH = [1.0 - a.breath_var * (k % 2) for k in range(a.breaths)]
+STARTS = np.cumsum([0.0] + DURS[:-1]).tolist()
+
+
+def smoothstep(u):
+    return u * u * (3 - 2 * u)
+
+
 def breath(ph):
-    # soft inhale (40%) -> longer exhale (50%) -> tiny rest (10%), all eased
-    if ph < 0.4:
-        return 0.5 - 0.5 * math.cos(math.pi * ph / 0.4)
-    if ph < 0.9:
-        return 0.5 + 0.5 * math.cos(math.pi * (ph - 0.4) / 0.5)
+    # gentle inhale -> relaxed exhale that lets go quickly then drifts down slowly -> short still pause
+    ri, re_ = a.inhale, 1.0 - a.rest
+    if ph < ri:
+        return 0.5 - 0.5 * math.cos(math.pi * ph / ri)
+    if ph < re_:
+        return 1.0 - smoothstep(((ph - ri) / (re_ - ri)) ** 0.75)
     return 0.0
 
 
 def B(t, lag=0.0):
-    return breath(((t - lag) % a.period) / a.period)
+    tt = (t - lag) % DUR
+    k = max(i for i in range(len(STARTS)) if STARTS[i] <= tt + 1e-9)
+    return DEPTH[k] * breath((tt - STARTS[k]) / DURS[k])
 
 
 pivot_tail = (235.0 * sc, 720.0 * sc)
@@ -140,15 +170,16 @@ if a.webm:
 n_frames = int(round(FPS * DUR))
 for i in range(n_frames):
     t = i / FPS
-    # 1) float + tilt
-    bob = -a.bob * math.sin(w1 * t)
-    tilt = math.radians(a.tilt) * math.sin(w1 * t + 0.9)
-    X, Y = xx.copy(), yy - bob
+    # 1) float + tilt: a slow drift over the loop, plus a little lift and head-side rise riding each breath
+    fb = B(t)
+    up = a.bob * math.sin(w1 * t) + a.bob_breath * B(t, 0.22)        # px, positive = up
+    tilt = math.radians(a.tilt) * math.sin(w1 * t + 0.9) - math.radians(a.tilt_breath) * B(t, 0.1)
+    X, Y = xx.copy(), yy + up
     c, s = math.cos(-tilt), math.sin(-tilt)
     dx, dy = X - cx, Y - base
     X, Y = cx + c * dx - s * dy, base + s * dx + c * dy
     # 2) breathing (bottom anchored); pillow follows a beat later and softer
-    fb, fp = B(t), B(t, 0.18)
+    fp = B(t, 0.18)
     fl = fb * (1 - pillow) + 0.6 * fp * pillow
     Y = base - (base - Y) / (1 + a.breath_y * fl)
     X = cx + (X - cx) / (1 + a.breath_x * fl * (0.3 + 0.7 * h))
@@ -166,15 +197,11 @@ for i in range(n_frames):
                     borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
     out = np.clip(out, 0, 255)
 
-    # blush deepens slightly on inhale
-    cheeks = soft_disc(640, 690 - bob / sc, 45, 30, 0.6) + soft_disc(960, 620 - bob / sc, 40, 28, 0.6)
-    blush = (0.10 * fb) * cheeks[..., None] * np.array([-18, -8, 6], np.float32)
-    out[..., :3] = np.clip(out[..., :3] + blush * (out[..., 3:4] / 255), 0, 255)
-
     # soft contact shadow that shrinks as the cloud floats up
     sh = 0.0
     if not a.no_shadow:
-        lift = (bob + a.bob) / (2 * a.bob) if a.bob else 0.5
+        span = 2 * a.bob + a.bob_breath
+        lift = (up + a.bob) / span if span else 0.5
         sh = (soft_disc(625, 918, 440 * (1 - 0.08 * lift), 22, 1.6) * (0.10 - 0.035 * lift))[..., None]
     al = out[..., 3:4] / 255.0
 
